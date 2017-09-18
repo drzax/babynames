@@ -7,19 +7,15 @@ const stringify = require('csv-stringify');
 const {
   csvRows,
   saParseRow,
-  sum,
+  aggregate,
   addLocation,
   jsonStringify
 } = require('./transforms');
-
-const outStream = addLocation('au-sa');
-
-outStream.pipe(jsonStringify()).pipe(fs.createWriteStream('output/au-sa.json'));
 
 var stream = vfs
   .src('./data-au/sa/*.csv', { buffer: false })
   .pipe(csvRows(1))
   .pipe(saParseRow())
-  .pipe(sum(outStream))
+  .pipe(aggregate('output/au-sa.sqlite'))
   .pipe(stringify())
   .pipe(fs.createWriteStream('output/au-sa.csv'));

@@ -1,95 +1,57 @@
 const through2 = require('through2');
 const csvParse = require('csv-parse');
 const namecase = require('namecase');
+const sqlite = require('sqlite');
 
 // A function to summarise the data as it flows through the stream.
-var sum = writable => {
+var aggregate = location => {
   const data = {
     count: { total: 0, female: 0, male: 0 },
-    extent: [Infinity, 0],
     years: {},
     names: {}
   };
 
-  const { count, extent, years, names } = data;
+  const { count, years, names } = data;
 
   // Do all the counts on the way through
   return through2
     .obj((row, enc, cb) => {
       // Count all the babies
-      count.total += row.count;
       count[row.gender] += row.count;
-
-      // Set the extent of years
-      extent[0] = Math.min(data.extent[0], row.year);
-      extent[1] = Math.max(data.extent[1], row.year);
 
       // Check this year has an entry in the data
       years[row.year] = years[row.year] || {
-        count: { total: 0, female: 0, male: 0 }
+        count: { female: 0, male: 0 }
       };
 
       // Count the babies in this year
-      years[row.year].count.total += row.count;
       years[row.year].count[row.gender] += row.count;
 
       // Check this name has an entry in the data
       names[row.name] = names[row.name] || {
-        count: { total: 0, female: 0, male: 0 },
+        count: { female: 0, male: 0 },
         years: {}
       };
 
       // Count all the babies with this name
-      names[row.name].count.total += row.count;
       names[row.name].count[row.gender] += row.count;
 
       // Check the data has an entry for the year for this name
       names[row.name].years[row.year] = names[row.name].years[row.year] || {
-        count: { total: 0, female: 0, male: 0 }
+        count: { female: 0, male: 0 }
       };
 
       // Count all the babies for this name in this year
-      names[row.name].years[row.year].count.total += row.count;
       names[row.name].years[row.year].count[row.gender] += row.count;
 
       // Send it downstream.
       cb(null, row);
     })
     .on('end', () => {
-      // Calculate prevalence after all the counting is done
-      for (let name in names) {
-        let nameData = names[name];
-
-        // Total name prevalence
-        nameData.prevalence = {
-          total: nameData.count.total / count.total,
-          female: nameData.count.female / count.female,
-          male: nameData.count.male / count.male
-        };
-
-        // Per year name prevalence
-        for (let year in nameData.years) {
-          let yearData = nameData.years[year];
-
-          yearData.prevalence = {
-            total: yearData.count.total / years[year].count.total,
-            female: yearData.count.female / years[year].count.female,
-            male: yearData.count.male / years[year].count.male
-          };
-        }
-      }
-
-      if (writable) {
-        writable.write(data);
+      if (location) {
+        store(data, location).then(() => console.log('done'));
       }
     });
-};
-
-const addLocation = location => {
-  return through2.obj((obj, enc, cb) => {
-    obj.location = location;
-    cb(null, obj);
-  });
 };
 
 const jsonStringify = () => {
@@ -147,12 +109,88 @@ const csvRows = rows => {
   });
 };
 
+const store = async (data, location) => {
+  const { count, years, names } = data;
+  const conn = sqlite
+    .open(location)
+    .then(db => db.migrate())
+    .then(db => db.driver);
+  const db = await conn;
+
+  // Calculate prevalence after all the counting is done
+
+  Object.keys(names).forEach(name => {
+    let nameData = names[name];
+
+    // Total name prevalence
+    nameData.prevalence = {
+      total:
+        (nameData.count.female + nameData.count.male) /
+        (count.female + count.male),
+      female: nameData.count.female / count.female,
+      male: nameData.count.male / count.male
+    };
+    db.serialize(() => {
+      db.run('BEGIN');
+
+      let namesStatement = db.prepare(
+        'INSERT OR REPLACE INTO names VALUES (?, ?, ?, ?, ?, ?)'
+      );
+
+      namesStatement.run([
+        name,
+        nameData.count.female,
+        nameData.count.male,
+        nameData.prevalence.female,
+        nameData.prevalence.male,
+        nameData.prevalence.total
+      ]);
+
+      namesStatement.finalize();
+
+      db.run('COMMIT');
+
+      db.run('BEGIN');
+
+      let yearsStatement = db.prepare(
+        'INSERT OR REPLACE INTO years VALUES (?, ?, ?, ?, ?, ?, ?)'
+      );
+
+      Object.keys(years).forEach(year => {
+        let yearData = nameData.years[year] || {
+          count: { female: 0, male: 0 }
+        };
+
+        yearData.prevalence = {
+          total:
+            (yearData.count.female + yearData.count.male) /
+            (years[year].count.female + years[year].count.male),
+          female: yearData.count.female / years[year].count.female,
+          male: yearData.count.male / years[year].count.male
+        };
+
+        yearsStatement.run([
+          year,
+          name,
+          yearData.count.female,
+          yearData.count.male,
+          yearData.prevalence.female,
+          yearData.prevalence.male,
+          yearData.prevalence.total
+        ]);
+      });
+      yearsStatement.finalize();
+      db.run('COMMIT');
+    });
+  });
+  return;
+};
+
 module.exports = {
   csvRows,
-  sum,
+  aggregate,
   saParseRow,
   usaParseRow,
   skip,
-  addLocation,
   jsonStringify
 };
