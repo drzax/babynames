@@ -8,13 +8,15 @@ const {
   csvRows,
   usaParseRow,
   aggregate,
-  jsonStringify
+  jsonStringify,
+  abbreviateGender
 } = require('./transforms');
 
 var stream = vfs
   .src('./data/*.txt', { buffer: false })
   .pipe(csvRows())
   .pipe(usaParseRow())
-  .pipe(aggregate('output/us.sqlite'))
+  .pipe(abbreviateGender())
+  // .pipe(aggregate('output/us.sqlite'))
   .pipe(stringify())
   .pipe(fs.createWriteStream('output/us.csv'));

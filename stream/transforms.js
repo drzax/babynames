@@ -111,15 +111,13 @@ const csvRows = rows => {
 
 const store = async (data, location) => {
   const { count, years, names } = data;
-  const conn = sqlite
-    .open(location)
-    .then(db => db.migrate())
-    .then(db => db.driver);
+  const conn = sqlite.open(location).then(db => db.migrate({ force: 'last' }));
+
   const db = await conn;
 
   // Calculate prevalence after all the counting is done
 
-  Object.keys(names).forEach(name => {
+  Object.keys(names).forEach(async name => {
     let nameData = names[name];
 
     // Total name prevalence
@@ -130,36 +128,34 @@ const store = async (data, location) => {
       female: nameData.count.female / count.female,
       male: nameData.count.male / count.male
     };
-    db.serialize(() => {
-      db.run('BEGIN');
 
-      let namesStatement = db.prepare(
-        'INSERT OR REPLACE INTO names VALUES (?, ?, ?, ?, ?, ?)'
-      );
+    let namesStatement = db.driver.prepare(
+      `INSERT OR REPLACE INTO names VALUES (?, ?, ?, ?, ?, ?, ?)`
+    );
+
+    let yearsStatement = db.driver.prepare(
+      'INSERT OR REPLACE INTO years VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+    );
+
+    db.driver.serialize(() => {
+      db.run('BEGIN');
 
       namesStatement.run([
         name,
         nameData.count.female,
         nameData.count.male,
+        nameData.count.female + nameData.count.male,
         nameData.prevalence.female,
         nameData.prevalence.male,
         nameData.prevalence.total
       ]);
 
-      namesStatement.finalize();
-
       db.run('COMMIT');
 
       db.run('BEGIN');
 
-      let yearsStatement = db.prepare(
-        'INSERT OR REPLACE INTO years VALUES (?, ?, ?, ?, ?, ?, ?)'
-      );
-
-      Object.keys(years).forEach(year => {
-        let yearData = nameData.years[year] || {
-          count: { female: 0, male: 0 }
-        };
+      Object.keys(nameData.years).forEach(year => {
+        let yearData = nameData.years[year];
 
         yearData.prevalence = {
           total:
@@ -174,16 +170,24 @@ const store = async (data, location) => {
           name,
           yearData.count.female,
           yearData.count.male,
+          yearData.count.female + yearData.count.male,
           yearData.prevalence.female,
           yearData.prevalence.male,
           yearData.prevalence.total
         ]);
       });
-      yearsStatement.finalize();
+
       db.run('COMMIT');
     });
   });
   return;
+};
+
+const abbreviateGender = () => {
+  return through2.obj((row, enc, cb) => {
+    row.gender = row.gender === 'female' ? 'f' : 'm';
+    cb(null, row);
+  });
 };
 
 module.exports = {
@@ -192,5 +196,6 @@ module.exports = {
   saParseRow,
   usaParseRow,
   skip,
-  jsonStringify
+  jsonStringify,
+  abbreviateGender
 };

@@ -16,6 +16,6 @@ var stream = vfs
   .src('./data-au/sa/*.csv', { buffer: false })
   .pipe(csvRows(1))
   .pipe(saParseRow())
-  .pipe(aggregate('output/au-sa.sqlite'))
+  // .pipe(aggregate('output/au-sa.sqlite'))
   .pipe(stringify())
   .pipe(fs.createWriteStream('output/au-sa.csv'));
